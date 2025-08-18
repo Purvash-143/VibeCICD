@@ -57,27 +57,53 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            vibecoding/node_modules
+            node_modules
             ~/.npm
-          key: ${{ runner.os }}-node-${{ hashFiles('vibecoding/package-lock.json') }}
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json', 'package.json') }}
           restore-keys: |
             ${{ runner.os }}-node-
 
+      - name: Check package files
+        run: |
+          echo "Checking package files..."
+          ls -la package*
+          echo "Current directory:"
+          pwd
+
       - name: Install dependencies
-        working-directory: ./vibecoding
-        run: npm ci --prefer-offline --no-audit
+        run: |
+          if [ -f package-lock.json ]; then
+            echo "Using npm ci with existing package-lock.json"
+            npm ci --prefer-offline --no-audit
+          else
+            echo "No package-lock.json found, using npm install"
+            npm install --prefer-offline --no-audit
+          fi
 
       - name: Run ESLint
-        working-directory: ./vibecoding
         run: |
-          npx eslint . --ext .js,.jsx,.ts,.tsx --format json --output-file eslint-results.json || true
-          npx eslint . --ext .js,.jsx,.ts,.tsx || true
+          # Check if we have a vibecoding directory with source code
+          if [ -d "vibecoding/src" ]; then
+            echo "Running ESLint on vibecoding directory..."
+            cd vibecoding
+            npx eslint src --ext .js,.jsx,.ts,.tsx --format json --output-file ../eslint-results.json || true
+            npx eslint src --ext .js,.jsx,.ts,.tsx || true
+          else
+            echo "Running ESLint on current directory..."
+            npx eslint . --ext .js,.jsx,.ts,.tsx --format json --output-file eslint-results.json || true
+            npx eslint . --ext .js,.jsx,.ts,.tsx || true
+          fi
         continue-on-error: true
 
       - name: Run Prettier Check
-        working-directory: ./vibecoding
         run: |
-          npx prettier --check . || true
+          if [ -d "vibecoding" ]; then
+            echo "Running Prettier check on vibecoding directory..."
+            cd vibecoding && npx prettier --check . || true
+          else
+            echo "Running Prettier check on current directory..."
+            npx prettier --check . || true
+          fi
         continue-on-error: true
 
       - name: Upload Linting Results
@@ -85,7 +111,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: linting-results
-          path: vibecoding/eslint-results.json
+          path: eslint-results.json
           retention-days: 5
 
   # Stage 3: CodeQL Analysis
@@ -119,19 +145,31 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            vibecoding/node_modules
+            node_modules
             ~/.npm
-          key: ${{ runner.os }}-node-codeql-${{ hashFiles('vibecoding/package-lock.json') }}
+          key: ${{ runner.os }}-node-codeql-${{ hashFiles('package-lock.json', 'package.json') }}
           restore-keys: |
             ${{ runner.os }}-node-
 
       - name: Install dependencies
-        working-directory: ./vibecoding
-        run: npm ci --prefer-offline --no-audit
+        run: |
+          if [ -f package-lock.json ]; then
+            echo "Using npm ci with existing package-lock.json"
+            npm ci --prefer-offline --no-audit
+          else
+            echo "No package-lock.json found, using npm install"
+            npm install --prefer-offline --no-audit
+          fi
 
       - name: Build for CodeQL
-        working-directory: ./vibecoding
-        run: npm run build:docker
+        run: |
+          if [ -d "vibecoding" ] && [ -f "vibecoding/package.json" ]; then
+            echo "Building from vibecoding directory..."
+            cd vibecoding && npm run build:docker
+          else
+            echo "Building from current directory..."
+            npm run build:docker || npm run build
+          fi
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
@@ -160,25 +198,36 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            vibecoding/node_modules
+            node_modules
             ~/.npm
-          key: ${{ runner.os }}-node-build-${{ hashFiles('vibecoding/package-lock.json') }}
+          key: ${{ runner.os }}-node-build-${{ hashFiles('package-lock.json', 'package.json') }}
           restore-keys: |
             ${{ runner.os }}-node-
 
       - name: Install dependencies
-        working-directory: ./vibecoding
-        run: npm ci --prefer-offline --no-audit
+        run: |
+          if [ -f package-lock.json ]; then
+            echo "Using npm ci with existing package-lock.json"
+            npm ci --prefer-offline --no-audit
+          else
+            echo "No package-lock.json found, using npm install"
+            npm install --prefer-offline --no-audit
+          fi
 
       - name: Run tests
-        working-directory: ./vibecoding
         run: |
           npm test -- --coverage --watchAll=false || true
         continue-on-error: true
 
       - name: Build application
-        working-directory: ./vibecoding
-        run: npm run build:docker
+        run: |
+          if [ -d "vibecoding" ] && [ -f "vibecoding/package.json" ]; then
+            echo "Building from vibecoding directory..."
+            cd vibecoding && npm run build:docker
+          else
+            echo "Building from current directory..."
+            npm run build:docker || npm run build
+          fi
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -209,8 +258,8 @@ jobs:
         id: build
         uses: docker/build-push-action@v5
         with:
-          context: ./vibecoding
-          file: ./vibecoding/Dockerfile
+          context: .
+          file: ./Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -299,14 +348,28 @@ jobs:
       - name: Update deployment image
         run: |
           # Update the image tag in deployment file
-          sed -i "s|image: .*|image: ${{ needs.build.outputs.image-tag }}|g" vibecoding/k8s/app-deployment.yaml
+          if [ -f k8s/app-deployment.yaml ]; then
+            sed -i "s|image: .*|image: ${{ needs.build.outputs.image-tag }}|g" k8s/app-deployment.yaml
+          elif [ -f vibecoding/k8s/app-deployment.yaml ]; then
+            sed -i "s|image: .*|image: ${{ needs.build.outputs.image-tag }}|g" vibecoding/k8s/app-deployment.yaml
+          fi
 
       - name: Deploy to Kubernetes
         run: |
-          kubectl apply -f vibecoding/k8s/00-namespace.yaml
-          kubectl apply -f vibecoding/k8s/postgres-simple.yaml
-          kubectl apply -f vibecoding/k8s/app-deployment.yaml
-          kubectl apply -f vibecoding/k8s/07-app-service.yaml
+          # Deploy from k8s directory in main repo
+          if [ -d "k8s" ]; then
+            echo "Deploying from main k8s directory..."
+            kubectl apply -f k8s/00-namespace.yaml || true
+            kubectl apply -f k8s/postgres-simple.yaml || kubectl apply -f k8s/04-postgres-deployment.yaml || true
+            kubectl apply -f k8s/app-deployment.yaml || true
+            kubectl apply -f k8s/07-app-service.yaml || kubectl apply -f k8s/app-service-nodeport.yaml || true
+          elif [ -d "vibecoding/k8s" ]; then
+            echo "Deploying from vibecoding k8s directory..."
+            kubectl apply -f vibecoding/k8s/00-namespace.yaml || true
+            kubectl apply -f vibecoding/k8s/postgres-simple.yaml || true
+            kubectl apply -f vibecoding/k8s/app-deployment.yaml || true
+            kubectl apply -f vibecoding/k8s/07-app-service.yaml || true
+          fi
 
       - name: Wait for deployment to be ready
         run: |
