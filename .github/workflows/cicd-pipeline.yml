@@ -296,12 +296,13 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ vars.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ vars.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ vars.AWS_SESSION_TOKEN }}
+          aws-access-key-id: ${{ vars.AWS_ACCESS_KEY_ID || secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ vars.AWS_SECRET_ACCESS_KEY || secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ vars.AWS_SESSION_TOKEN || secrets.AWS_SESSION_TOKEN }}
           aws-region: ap-south-1
 
       - name: Login to Amazon ECR
+        id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Run Trivy vulnerability scanner
@@ -330,7 +331,7 @@ jobs:
   deploy:
     name: 🚀 Deploy to EKS
     runs-on: ubuntu-latest
-    needs: trivy-scan  # Wait for Trivy to complete
+    needs: [build, trivy-scan]  # Wait for both build and trivy to complete
     if: always() && needs.build.result == 'success'  # Only deploy if build succeeded
     environment: production
     steps:
@@ -340,10 +341,14 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ vars.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ vars.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ vars.AWS_SESSION_TOKEN }}
+          aws-access-key-id: ${{ vars.AWS_ACCESS_KEY_ID || secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ vars.AWS_SECRET_ACCESS_KEY || secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ vars.AWS_SESSION_TOKEN || secrets.AWS_SESSION_TOKEN }}
           aws-region: ap-south-1
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
 
       - name: Update kube config
         run: |
@@ -370,7 +375,9 @@ jobs:
       - name: Update deployment image
         run: |
           # Update the image tag in deployment file
-          if [ -f vibecoding/k8s/app-deployment.yaml ]; then
+          if [ -f vibecoding/k8s/06-app-deployment.yaml ]; then
+            sed -i "s|image: .*|image: ${{ needs.build.outputs.image-tag }}|g" vibecoding/k8s/06-app-deployment.yaml
+          elif [ -f vibecoding/k8s/app-deployment.yaml ]; then
             sed -i "s|image: .*|image: ${{ needs.build.outputs.image-tag }}|g" vibecoding/k8s/app-deployment.yaml
           elif [ -f k8s/app-deployment.yaml ]; then
             sed -i "s|image: .*|image: ${{ needs.build.outputs.image-tag }}|g" k8s/app-deployment.yaml
@@ -378,26 +385,30 @@ jobs:
 
       - name: Deploy to Kubernetes
         run: |
-          # Deploy from vibecoding k8s directory first, then fallback to main k8s
+          # Deploy from vibecoding k8s directory with correct file names
           if [ -d "vibecoding/k8s" ]; then
             echo "Deploying from vibecoding k8s directory..."
             kubectl apply -f vibecoding/k8s/00-namespace.yaml || true
-            kubectl apply -f vibecoding/k8s/postgres-simple.yaml || true
-            kubectl apply -f vibecoding/k8s/app-deployment.yaml || true
+            kubectl apply -f vibecoding/k8s/postgres-simple.yaml || kubectl apply -f vibecoding/k8s/04-postgres-deployment.yaml || true
+            kubectl apply -f vibecoding/k8s/05-postgres-service.yaml || true
+            kubectl apply -f vibecoding/k8s/06-app-deployment.yaml || kubectl apply -f vibecoding/k8s/app-deployment.yaml || true
             kubectl apply -f vibecoding/k8s/07-app-service.yaml || true
           elif [ -d "k8s" ]; then
             echo "Deploying from main k8s directory..."
-            kubectl apply -f k8s/00-namespace.yaml || true
-            kubectl apply -f k8s/postgres-simple.yaml || kubectl apply -f k8s/04-postgres-deployment.yaml || true
-            kubectl apply -f k8s/app-deployment.yaml || true
-            kubectl apply -f k8s/07-app-service.yaml || kubectl apply -f k8s/app-service-nodeport.yaml || true
+            kubectl apply -f k8s/app-service-nodeport.yaml || true
           fi
 
       - name: Wait for deployment to be ready
         run: |
+          kubectl rollout status deployment/insurance-app -n insurance-app --timeout=300s || 
           kubectl rollout status deployment/insurance-app-deployment -n insurance-app --timeout=300s
 
       - name: Get service URL
+        run: |
+          echo "Getting service information..."
+          kubectl get services -n insurance-app
+          echo "Getting pod status..."
+          kubectl get pods -n insurance-app
         id: get-url
         run: |
           EXTERNAL_IP=$(kubectl get svc insurance-app-service -n insurance-app -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
