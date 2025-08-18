@@ -233,12 +233,27 @@ jobs:
           NEXTAUTH_URL: http://localhost:3000
         run: npm run build:docker
 
+      - name: Debug AWS Credentials
+        run: |
+          echo "Checking AWS credential variables..."
+          echo "AWS_ACCESS_KEY_ID length: ${#AWS_ACCESS_KEY_ID}"
+          echo "AWS_SECRET_ACCESS_KEY length: ${#AWS_SECRET_ACCESS_KEY}"
+          if [ -n "$AWS_SESSION_TOKEN" ]; then
+            echo "AWS_SESSION_TOKEN length: ${#AWS_SESSION_TOKEN}"
+          else
+            echo "AWS_SESSION_TOKEN: not set"
+          fi
+        env:
+          AWS_ACCESS_KEY_ID: ${{ vars.AWS_ACCESS_KEY_ID || secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ vars.AWS_SECRET_ACCESS_KEY || secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ vars.AWS_SESSION_TOKEN || secrets.AWS_SESSION_TOKEN }}
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ vars.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ vars.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ vars.AWS_SESSION_TOKEN }}
+          aws-access-key-id: ${{ vars.AWS_ACCESS_KEY_ID || secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ vars.AWS_SECRET_ACCESS_KEY || secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ vars.AWS_SESSION_TOKEN || secrets.AWS_SESSION_TOKEN }}
           aws-region: ap-south-1
 
       - name: Login to Amazon ECR
