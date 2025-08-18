@@ -57,43 +57,45 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            vibecoding/node_modules
+            node_modules
             ~/.npm
-          key: ${{ runner.os }}-node-${{ hashFiles('vibecoding/package-lock.json', 'vibecoding/package.json') }}
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json', 'package.json') }}
           restore-keys: |
             ${{ runner.os }}-node-
 
       - name: Check package files
-        working-directory: ./vibecoding
         run: |
-          echo "Checking package files in vibecoding directory..."
-          ls -la package*
-          echo "Current directory:"
-          pwd
+          echo "Checking package files in main directory..."
+          echo "Current directory: $(pwd)"
+          echo "Listing all files:"
+          ls -la
+          echo "Looking for package files specifically:"
+          find . -name "package*.json" -o -name "package-lock.json" | head -5
 
       - name: Install dependencies
-        working-directory: ./vibecoding
         run: |
-          if [ -f package-lock.json ]; then
-            echo "Using npm ci with existing package-lock.json"
+          echo "Checking for package files..."
+          if [ -f package-lock.json ] && [ -f package.json ]; then
+            echo "Found both package.json and package-lock.json - using npm ci"
             npm ci --prefer-offline --no-audit
-          else
-            echo "No package-lock.json found, using npm install"
+          elif [ -f package.json ]; then
+            echo "Found package.json but no package-lock.json - using npm install"
             npm install --prefer-offline --no-audit
+          else
+            echo "ERROR: No package.json found!"
+            exit 1
           fi
 
       - name: Run ESLint
-        working-directory: ./vibecoding
         run: |
-          echo "Running ESLint on vibecoding directory..."
-          npx eslint src --ext .js,.jsx,.ts,.tsx --format json --output-file ../eslint-results.json || true
+          echo "Running ESLint on src directory..."
+          npx eslint src --ext .js,.jsx,.ts,.tsx --format json --output-file eslint-results.json || true
           npx eslint src --ext .js,.jsx,.ts,.tsx || true
         continue-on-error: true
 
       - name: Run Prettier Check
-        working-directory: ./vibecoding
         run: |
-          echo "Running Prettier check on vibecoding directory..."
+          echo "Running Prettier check..."
           npx prettier --check . || true
         continue-on-error: true
 
@@ -136,14 +138,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            vibecoding/node_modules
+            node_modules
             ~/.npm
-          key: ${{ runner.os }}-node-codeql-${{ hashFiles('vibecoding/package-lock.json', 'vibecoding/package.json') }}
+          key: ${{ runner.os }}-node-codeql-${{ hashFiles('package-lock.json', 'package.json') }}
           restore-keys: |
             ${{ runner.os }}-node-
 
       - name: Install dependencies
-        working-directory: ./vibecoding
         run: |
           if [ -f package-lock.json ]; then
             echo "Using npm ci with existing package-lock.json"
@@ -154,7 +155,6 @@ jobs:
           fi
 
       - name: Build for CodeQL
-        working-directory: ./vibecoding
         run: npm run build:docker
 
       - name: Perform CodeQL Analysis
@@ -184,14 +184,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            vibecoding/node_modules
+            node_modules
             ~/.npm
-          key: ${{ runner.os }}-node-build-${{ hashFiles('vibecoding/package-lock.json', 'vibecoding/package.json') }}
+          key: ${{ runner.os }}-node-build-${{ hashFiles('package-lock.json', 'package.json') }}
           restore-keys: |
             ${{ runner.os }}-node-
 
       - name: Install dependencies
-        working-directory: ./vibecoding
         run: |
           if [ -f package-lock.json ]; then
             echo "Using npm ci with existing package-lock.json"
@@ -202,13 +201,11 @@ jobs:
           fi
 
       - name: Run tests
-        working-directory: ./vibecoding
         run: |
           npm test -- --coverage --watchAll=false || true
         continue-on-error: true
 
       - name: Build application
-        working-directory: ./vibecoding
         run: npm run build:docker
 
       - name: Configure AWS credentials
@@ -240,8 +237,8 @@ jobs:
         id: build
         uses: docker/build-push-action@v5
         with:
-          context: ./vibecoding
-          file: ./vibecoding/Dockerfile
+          context: .
+          file: ./Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
