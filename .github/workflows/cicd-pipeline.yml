@@ -409,6 +409,8 @@ jobs:
           kubectl get services -n insurance-app
           echo "Getting pod status..."
           kubectl get pods -n insurance-app
+
+      - name: Get deployment URL
         id: get-url
         run: |
           EXTERNAL_IP=$(kubectl get svc insurance-app-service -n insurance-app -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
