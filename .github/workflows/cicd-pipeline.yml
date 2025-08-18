@@ -14,7 +14,7 @@ env:
   AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
 
 jobs:
-  # Stage 1: GitLeaks - Secret Detection
+  # Stage 1: GitLeaks Security Scan
   gitleaks:
     name: 🔍 GitLeaks - Secret Detection
     runs-on: ubuntu-latest
@@ -39,10 +39,11 @@ jobs:
           path: results.sarif
           retention-days: 5
 
-  # Stage 2: Linting - ESLint and Prettier
+  # Stage 2: Linting - ESLint and Prettier (Sequential - runs after GitLeaks)
   linting:
     name: 🧹 Code Linting & Syntax Check
     runs-on: ubuntu-latest
+    needs: gitleaks  # Wait for GitLeaks to complete
     continue-on-error: true  # Warn but don't fail
     steps:
       - name: Checkout code
@@ -87,6 +88,11 @@ jobs:
           fi
 
       - name: Run ESLint
+        env:
+          # Provide dummy values for any environment variables needed during linting
+          AWS_REGION: us-east-1
+          DATABASE_URL: postgresql://dummy:dummy@localhost:5432/dummy
+          NEXTAUTH_SECRET: dummy-secret
         run: |
           echo "Running ESLint on src directory..."
           npx eslint src --ext .js,.jsx,.ts,.tsx --format json --output-file eslint-results.json || true
@@ -107,10 +113,11 @@ jobs:
           path: eslint-results.json
           retention-days: 5
 
-  # Stage 3: CodeQL Analysis
+  # Stage 3: CodeQL Analysis (Sequential - runs after Linting)
   codeql:
     name: 🔒 CodeQL Security Analysis
     runs-on: ubuntu-latest
+    needs: linting  # Wait for Linting to complete
     continue-on-error: true  # Warn but don't fail
     permissions:
       actions: read
@@ -155,6 +162,15 @@ jobs:
           fi
 
       - name: Build for CodeQL
+        env:
+          # Provide dummy values for build-time environment variables
+          AWS_REGION: us-east-1
+          AWS_ACCESS_KEY_ID: dummy
+          AWS_SECRET_ACCESS_KEY: dummy
+          AWS_S3_BUCKET: dummy
+          DATABASE_URL: postgresql://dummy:dummy@localhost:5432/dummy
+          NEXTAUTH_SECRET: dummy-secret-for-build
+          NEXTAUTH_URL: http://localhost:3000
         run: npm run build:docker
 
       - name: Perform CodeQL Analysis
@@ -162,11 +178,11 @@ jobs:
         with:
           category: "/language:${{matrix.language}}"
 
-  # Stage 4: Build Application
+  # Stage 4: Build Application (Sequential - runs after CodeQL)
   build:
     name: 🏗️ Build Application
     runs-on: ubuntu-latest
-    needs: [gitleaks, linting, codeql]
+    needs: codeql  # Wait for CodeQL to complete
     if: always()  # Run even if previous jobs failed (since they're warnings)
     outputs:
       image-tag: ${{ steps.meta.outputs.tags }}
@@ -206,6 +222,15 @@ jobs:
         continue-on-error: true
 
       - name: Build application
+        env:
+          # Provide dummy values for build-time environment variables
+          AWS_REGION: us-east-1
+          AWS_ACCESS_KEY_ID: dummy
+          AWS_SECRET_ACCESS_KEY: dummy
+          AWS_S3_BUCKET: dummy
+          DATABASE_URL: postgresql://dummy:dummy@localhost:5432/dummy
+          NEXTAUTH_SECRET: dummy-secret-for-build
+          NEXTAUTH_URL: http://localhost:3000
         run: npm run build:docker
 
       - name: Configure AWS credentials
@@ -245,11 +270,11 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # Stage 5: Docker Image Vulnerability Scan with Trivy
+  # Stage 5: Docker Image Vulnerability Scan with Trivy (Sequential - runs after Build)
   trivy-scan:
     name: 🛡️ Trivy Docker Image Scan
     runs-on: ubuntu-latest
-    needs: build
+    needs: build  # Wait for Build to complete
     continue-on-error: true  # Warn but don't fail
     steps:
       - name: Configure AWS credentials
@@ -284,11 +309,11 @@ jobs:
           path: trivy-results.sarif
           retention-days: 5
 
-  # Stage 6: Deploy to EKS Cluster
+  # Stage 6: Deploy to EKS Cluster (Sequential - runs after Trivy)
   deploy:
     name: 🚀 Deploy to EKS
     runs-on: ubuntu-latest
-    needs: [build, trivy-scan]
+    needs: trivy-scan  # Wait for Trivy to complete
     if: always() && needs.build.result == 'success'  # Only deploy if build succeeded
     environment: production
     steps:
@@ -377,11 +402,11 @@ jobs:
           echo "- **Region**: ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
           kubectl get pods -n ${{ env.KUBERNETES_NAMESPACE }} >> $GITHUB_STEP_SUMMARY
 
-  # Post-deployment notifications
+  # Post-deployment notifications (Sequential - runs after Deploy)
   notify:
     name: 📢 Post-Deployment Notifications
     runs-on: ubuntu-latest
-    needs: [deploy]
+    needs: deploy  # Wait for Deploy to complete
     if: always()
     steps:
       - name: Deployment Status
