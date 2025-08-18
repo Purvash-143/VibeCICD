@@ -1,0 +1,9 @@
+// GitLeaks ignore file for false positives
+test-secret-123
+dummy-api-key
+example.com/api/key
+localhost:3000
+127.0.0.1
+sample-token
+demo-password
+test-key-12345

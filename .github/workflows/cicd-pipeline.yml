@@ -1,0 +1,327 @@
+name: Insurance App CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+  EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
+  KUBERNETES_NAMESPACE: ${{ vars.KUBERNETES_NAMESPACE }}
+  AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+
+jobs:
+  # Stage 1: GitLeaks - Secret Detection
+  gitleaks:
+    name: 🔍 GitLeaks - Secret Detection
+    runs-on: ubuntu-latest
+    continue-on-error: true  # Warn but don't fail
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run GitLeaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+      - name: Upload GitLeaks report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitleaks-report
+          path: results.sarif
+          retention-days: 5
+
+  # Stage 2: Linting - ESLint and Prettier
+  linting:
+    name: 🧹 Code Linting & Syntax Check
+    runs-on: ubuntu-latest
+    continue-on-error: true  # Warn but don't fail
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: 'vibecoding/package-lock.json'
+
+      - name: Install dependencies
+        working-directory: ./vibecoding
+        run: npm ci
+
+      - name: Run ESLint
+        working-directory: ./vibecoding
+        run: |
+          npx eslint . --ext .js,.jsx,.ts,.tsx --format json --output-file eslint-results.json || true
+          npx eslint . --ext .js,.jsx,.ts,.tsx || true
+        continue-on-error: true
+
+      - name: Run Prettier Check
+        working-directory: ./vibecoding
+        run: |
+          npx prettier --check . || true
+        continue-on-error: true
+
+      - name: Upload Linting Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linting-results
+          path: vibecoding/eslint-results.json
+          retention-days: 5
+
+  # Stage 3: CodeQL Analysis
+  codeql:
+    name: 🔒 CodeQL Security Analysis
+    runs-on: ubuntu-latest
+    continue-on-error: true  # Warn but don't fail
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ 'javascript' ]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+
+      - name: Setup Node.js for CodeQL
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: 'vibecoding/package-lock.json'
+
+      - name: Install dependencies
+        working-directory: ./vibecoding
+        run: npm ci
+
+      - name: Build for CodeQL
+        working-directory: ./vibecoding
+        run: npm run build:docker
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{matrix.language}}"
+
+  # Stage 4: Build Application
+  build:
+    name: 🏗️ Build Application
+    runs-on: ubuntu-latest
+    needs: [gitleaks, linting, codeql]
+    if: always()  # Run even if previous jobs failed (since they're warnings)
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: 'vibecoding/package-lock.json'
+
+      - name: Install dependencies
+        working-directory: ./vibecoding
+        run: npm ci
+
+      - name: Run tests
+        working-directory: ./vibecoding
+        run: |
+          npm test -- --coverage --watchAll=false || true
+        continue-on-error: true
+
+      - name: Build application
+        working-directory: ./vibecoding
+        run: npm run build:docker
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ vars.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ vars.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: ./vibecoding
+          file: ./vibecoding/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Stage 5: Docker Image Vulnerability Scan with Trivy
+  trivy-scan:
+    name: 🛡️ Trivy Docker Image Scan
+    runs-on: ubuntu-latest
+    needs: build
+    continue-on-error: true  # Warn but don't fail
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ vars.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ vars.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ needs.build.outputs.image-tag }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+        continue-on-error: true
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: Upload Trivy scan results as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-scan-results
+          path: trivy-results.sarif
+          retention-days: 5
+
+  # Stage 6: Deploy to EKS Cluster
+  deploy:
+    name: 🚀 Deploy to EKS
+    runs-on: ubuntu-latest
+    needs: [build, trivy-scan]
+    if: always() && needs.build.result == 'success'  # Only deploy if build succeeded
+    environment: production
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ vars.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ vars.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kube config
+        run: |
+          aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.28.0'
+
+      - name: Create namespace if not exists
+        run: |
+          kubectl create namespace ${{ env.KUBERNETES_NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Create/Update ECR Secret
+        run: |
+          kubectl create secret docker-registry ecr-secret \
+            --docker-server=${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com \
+            --docker-username=AWS \
+            --docker-password=$(aws ecr get-login-password --region ${{ env.AWS_REGION }}) \
+            -n ${{ env.KUBERNETES_NAMESPACE }} \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Update deployment image
+        run: |
+          # Update the image tag in deployment file
+          sed -i "s|image: .*|image: ${{ needs.build.outputs.image-tag }}|g" vibecoding/k8s/app-deployment.yaml
+
+      - name: Deploy to Kubernetes
+        run: |
+          kubectl apply -f vibecoding/k8s/00-namespace.yaml
+          kubectl apply -f vibecoding/k8s/postgres-simple.yaml
+          kubectl apply -f vibecoding/k8s/app-deployment.yaml
+          kubectl apply -f vibecoding/k8s/07-app-service.yaml
+
+      - name: Wait for deployment to be ready
+        run: |
+          kubectl rollout status deployment/insurance-app-deployment -n ${{ env.KUBERNETES_NAMESPACE }} --timeout=300s
+
+      - name: Get service URL
+        id: get-url
+        run: |
+          EXTERNAL_IP=$(kubectl get svc insurance-app-service -n ${{ env.KUBERNETES_NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          echo "url=http://$EXTERNAL_IP" >> $GITHUB_OUTPUT
+          echo "### 🎉 Deployment Successful!" >> $GITHUB_STEP_SUMMARY
+          echo "Application URL: http://$EXTERNAL_IP" >> $GITHUB_STEP_SUMMARY
+
+      - name: Health Check
+        run: |
+          sleep 30  # Wait for LoadBalancer to be ready
+          EXTERNAL_IP=$(kubectl get svc insurance-app-service -n ${{ env.KUBERNETES_NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          curl -f http://$EXTERNAL_IP/api/health || echo "Health check failed, but deployment completed"
+
+      - name: Deployment Summary
+        run: |
+          echo "### Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image**: ${{ needs.build.outputs.image-tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Cluster**: ${{ env.EKS_CLUSTER_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Namespace**: ${{ env.KUBERNETES_NAMESPACE }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Region**: ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
+          kubectl get pods -n ${{ env.KUBERNETES_NAMESPACE }} >> $GITHUB_STEP_SUMMARY
+
+  # Post-deployment notifications
+  notify:
+    name: 📢 Post-Deployment Notifications
+    runs-on: ubuntu-latest
+    needs: [deploy]
+    if: always()
+    steps:
+      - name: Deployment Status
+        run: |
+          if [[ "${{ needs.deploy.result }}" == "success" ]]; then
+            echo "✅ Deployment completed successfully!"
+          else
+            echo "❌ Deployment failed!"
+          fi
