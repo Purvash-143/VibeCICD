@@ -7,10 +7,10 @@ on:
     branches: [ main ]
 
 env:
-  AWS_REGION: ${{ vars.AWS_REGION }}
-  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
-  EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
-  KUBERNETES_NAMESPACE: ${{ vars.KUBERNETES_NAMESPACE }}
+  AWS_REGION: ap-south-1
+  ECR_REPOSITORY: insurance-app
+  EKS_CLUSTER_NAME: eks-nvai-devops
+  KUBERNETES_NAMESPACE: insurance-app
   AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
 
 jobs:
@@ -238,7 +238,8 @@ jobs:
         with:
           aws-access-key-id: ${{ vars.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ vars.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-session-token: ${{ vars.AWS_SESSION_TOKEN }}
+          aws-region: ap-south-1
 
       - name: Login to Amazon ECR
         id: login-ecr
@@ -248,7 +249,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}
+          images: ${{ steps.login-ecr.outputs.registry }}/insurance-app
           tags: |
             type=ref,event=branch
             type=ref,event=pr
@@ -282,7 +283,8 @@ jobs:
         with:
           aws-access-key-id: ${{ vars.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ vars.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-session-token: ${{ vars.AWS_SESSION_TOKEN }}
+          aws-region: ap-south-1
 
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
@@ -325,11 +327,12 @@ jobs:
         with:
           aws-access-key-id: ${{ vars.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ vars.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-session-token: ${{ vars.AWS_SESSION_TOKEN }}
+          aws-region: ap-south-1
 
       - name: Update kube config
         run: |
-          aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
+          aws eks update-kubeconfig --name eks-nvai-devops --region ap-south-1
 
       - name: Install kubectl
         uses: azure/setup-kubectl@v3
@@ -338,15 +341,15 @@ jobs:
 
       - name: Create namespace if not exists
         run: |
-          kubectl create namespace ${{ env.KUBERNETES_NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create namespace insurance-app --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Create/Update ECR Secret
         run: |
           kubectl create secret docker-registry ecr-secret \
-            --docker-server=${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com \
+            --docker-server=${{ steps.login-ecr.outputs.registry }} \
             --docker-username=AWS \
-            --docker-password=$(aws ecr get-login-password --region ${{ env.AWS_REGION }}) \
-            -n ${{ env.KUBERNETES_NAMESPACE }} \
+            --docker-password=$(aws ecr get-login-password --region ap-south-1) \
+            -n insurance-app \
             --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Update deployment image
@@ -377,12 +380,12 @@ jobs:
 
       - name: Wait for deployment to be ready
         run: |
-          kubectl rollout status deployment/insurance-app-deployment -n ${{ env.KUBERNETES_NAMESPACE }} --timeout=300s
+          kubectl rollout status deployment/insurance-app-deployment -n insurance-app --timeout=300s
 
       - name: Get service URL
         id: get-url
         run: |
-          EXTERNAL_IP=$(kubectl get svc insurance-app-service -n ${{ env.KUBERNETES_NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          EXTERNAL_IP=$(kubectl get svc insurance-app-service -n insurance-app -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
           echo "url=http://$EXTERNAL_IP" >> $GITHUB_OUTPUT
           echo "### 🎉 Deployment Successful!" >> $GITHUB_STEP_SUMMARY
           echo "Application URL: http://$EXTERNAL_IP" >> $GITHUB_STEP_SUMMARY
@@ -390,17 +393,17 @@ jobs:
       - name: Health Check
         run: |
           sleep 30  # Wait for LoadBalancer to be ready
-          EXTERNAL_IP=$(kubectl get svc insurance-app-service -n ${{ env.KUBERNETES_NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          EXTERNAL_IP=$(kubectl get svc insurance-app-service -n insurance-app -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
           curl -f http://$EXTERNAL_IP/api/health || echo "Health check failed, but deployment completed"
 
       - name: Deployment Summary
         run: |
           echo "### Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "- **Image**: ${{ needs.build.outputs.image-tag }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Cluster**: ${{ env.EKS_CLUSTER_NAME }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Namespace**: ${{ env.KUBERNETES_NAMESPACE }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Region**: ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
-          kubectl get pods -n ${{ env.KUBERNETES_NAMESPACE }} >> $GITHUB_STEP_SUMMARY
+          echo "- **Cluster**: eks-nvai-devops" >> $GITHUB_STEP_SUMMARY
+          echo "- **Namespace**: insurance-app" >> $GITHUB_STEP_SUMMARY
+          echo "- **Region**: ap-south-1" >> $GITHUB_STEP_SUMMARY
+          kubectl get pods -n insurance-app >> $GITHUB_STEP_SUMMARY
 
   # Post-deployment notifications (Sequential - runs after Deploy)
   notify:
