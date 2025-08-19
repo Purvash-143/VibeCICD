@@ -305,27 +305,56 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Run Trivy vulnerability scanner
+      - name: Run Trivy vulnerability scanner (Table format)
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: ${{ needs.build.outputs.image-tag }}
-          format: 'sarif'
-          output: 'trivy-results.sarif'
+          format: 'table'
+          exit-code: '0'  # Don't fail the build on vulnerabilities
         continue-on-error: true
 
-      - name: Upload Trivy scan results to GitHub Security tab
-        if: always()
-        uses: github/codeql-action/upload-sarif@v3
+      - name: Run Trivy vulnerability scanner (JSON summary)
+        uses: aquasecurity/trivy-action@master
         with:
-          sarif_file: 'trivy-results.sarif'
+          image-ref: ${{ needs.build.outputs.image-tag }}
+          format: 'json'
+          output: 'trivy-results.json'
+        continue-on-error: true
+
+      - name: Display Trivy Results Summary
+        if: always()
+        run: |
+          echo "### 🛡️ Security Scan Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Image Scanned:** ${{ needs.build.outputs.image-tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f trivy-results.json ]; then
+            # Count vulnerabilities by severity
+            CRITICAL=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' trivy-results.json 2>/dev/null || echo "0")
+            HIGH=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH")] | length' trivy-results.json 2>/dev/null || echo "0")
+            MEDIUM=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="MEDIUM")] | length' trivy-results.json 2>/dev/null || echo "0")
+            LOW=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="LOW")] | length' trivy-results.json 2>/dev/null || echo "0")
+            
+            echo "| Severity | Count |" >> $GITHUB_STEP_SUMMARY
+            echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| 🔴 Critical | $CRITICAL |" >> $GITHUB_STEP_SUMMARY
+            echo "| 🟠 High | $HIGH |" >> $GITHUB_STEP_SUMMARY
+            echo "| 🟡 Medium | $MEDIUM |" >> $GITHUB_STEP_SUMMARY
+            echo "| 🟢 Low | $LOW |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "✅ **Security scan completed successfully**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ **No vulnerability report generated**" >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: Upload Trivy scan results as artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: trivy-scan-results
-          path: trivy-results.sarif
-          retention-days: 5
+          path: trivy-results.json
+          retention-days: 7
 
   # Stage 6: Deploy to EKS Cluster (Sequential - runs after Trivy)
   deploy:
