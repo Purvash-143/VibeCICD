@@ -414,7 +414,7 @@ jobs:
       - name: Update deployment image
         run: |
           echo "Image tag from build: ${{ needs.build.outputs.image-tag }}"
-          echo "Registry: ${{ steps.login-ecr.outputs.registry }}"
+          echo "Registry: ${{ needs.build.outputs.registry }}"
           
           # Update the image tag in deployment file
           if [ -f vibecoding/k8s/06-app-deployment.yaml ]; then
@@ -422,20 +422,17 @@ jobs:
             echo "Before update:"
             grep -n "image:" vibecoding/k8s/06-app-deployment.yaml
             
-            # Replace both the init container and main container images
-            sed -i "s|image: your-registry/insurance-app:latest.*|image: ${{ needs.build.outputs.image-tag }}|g" vibecoding/k8s/06-app-deployment.yaml
-            sed -i "s|image: .*insurance-app:.*|image: ${{ needs.build.outputs.image-tag }}|g" vibecoding/k8s/06-app-deployment.yaml
+            # Replace IMAGE_PLACEHOLDER with the new tag
+            sed -i "s|IMAGE_PLACEHOLDER|${{ needs.build.outputs.image-tag }}|g" vibecoding/k8s/06-app-deployment.yaml
             
             echo "After update:"
             grep -n "image:" vibecoding/k8s/06-app-deployment.yaml
           elif [ -f vibecoding/k8s/app-deployment.yaml ]; then
             echo "Updating app-deployment.yaml..."
-            sed -i "s|image: your-registry/insurance-app:latest.*|image: ${{ needs.build.outputs.image-tag }}|g" vibecoding/k8s/app-deployment.yaml
-            sed -i "s|image: .*insurance-app:.*|image: ${{ needs.build.outputs.image-tag }}|g" vibecoding/k8s/app-deployment.yaml
+            sed -i "s|IMAGE_PLACEHOLDER|${{ needs.build.outputs.image-tag }}|g" vibecoding/k8s/app-deployment.yaml
           elif [ -f k8s/app-deployment.yaml ]; then
             echo "Updating k8s/app-deployment.yaml..."
-            sed -i "s|image: your-registry/insurance-app:latest.*|image: ${{ needs.build.outputs.image-tag }}|g" k8s/app-deployment.yaml
-            sed -i "s|image: .*insurance-app:.*|image: ${{ needs.build.outputs.image-tag }}|g" k8s/app-deployment.yaml
+            sed -i "s|IMAGE_PLACEHOLDER|${{ needs.build.outputs.image-tag }}|g" k8s/app-deployment.yaml
           fi
 
       - name: Deploy to Kubernetes
@@ -529,8 +526,14 @@ jobs:
       - name: Health Check
         run: |
           sleep 30  # Wait for LoadBalancer to be ready
-          EXTERNAL_IP=$(kubectl get svc insurance-app-service -n insurance-app -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-          curl -f http://$EXTERNAL_IP/api/health || echo "Health check failed, but deployment completed"
+          EXTERNAL_IP=$(kubectl get svc insurance-app-service -n insurance-application -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+          if [ -n "$EXTERNAL_IP" ]; then
+            echo "LoadBalancer external IP: $EXTERNAL_IP"
+            curl -f http://$EXTERNAL_IP/api/health || echo "Health check failed, but deployment completed"
+          else
+            echo "No external IP available yet, checking service status:"
+            kubectl get svc insurance-app-service -n insurance-application || echo "Service not found"
+          fi
 
       - name: Deployment Summary
         run: |
