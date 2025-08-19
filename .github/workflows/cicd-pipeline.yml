@@ -403,13 +403,25 @@ jobs:
 
       - name: Update deployment image
         run: |
+          echo "Image tag from build: ${{ needs.build.outputs.image-tag }}"
+          echo "Registry: ${{ steps.login-ecr.outputs.registry }}"
+          
           # Update the image tag in deployment file
           if [ -f vibecoding/k8s/06-app-deployment.yaml ]; then
+            echo "Updating 06-app-deployment.yaml..."
             sed -i "s|image: .*|image: ${{ needs.build.outputs.image-tag }}|g" vibecoding/k8s/06-app-deployment.yaml
+            echo "Updated deployment file content:"
+            grep -A 2 -B 2 "image:" vibecoding/k8s/06-app-deployment.yaml
           elif [ -f vibecoding/k8s/app-deployment.yaml ]; then
+            echo "Updating app-deployment.yaml..."
             sed -i "s|image: .*|image: ${{ needs.build.outputs.image-tag }}|g" vibecoding/k8s/app-deployment.yaml
+            echo "Updated deployment file content:"
+            grep -A 2 -B 2 "image:" vibecoding/k8s/app-deployment.yaml
           elif [ -f k8s/app-deployment.yaml ]; then
+            echo "Updating k8s/app-deployment.yaml..."
             sed -i "s|image: .*|image: ${{ needs.build.outputs.image-tag }}|g" k8s/app-deployment.yaml
+            echo "Updated deployment file content:"
+            grep -A 2 -B 2 "image:" k8s/app-deployment.yaml
           fi
 
       - name: Deploy to Kubernetes
@@ -427,10 +439,37 @@ jobs:
             kubectl apply -f k8s/app-service-nodeport.yaml || true
           fi
 
+      - name: Restart deployment to pull new image
+        run: |
+          # Restart the deployment to ensure it pulls the new image
+          if kubectl get deployment insurance-app-deployment -n insurance-application &>/dev/null; then
+            echo "Restarting insurance-app-deployment..."
+            kubectl rollout restart deployment/insurance-app-deployment -n insurance-application
+          elif kubectl get deployment insurance-app -n insurance-application &>/dev/null; then
+            echo "Restarting insurance-app..."
+            kubectl rollout restart deployment/insurance-app -n insurance-application
+          fi
+
       - name: Wait for deployment to be ready
         run: |
-          kubectl rollout status deployment/insurance-app -n insurance-application --timeout=300s || 
-          kubectl rollout status deployment/insurance-app-deployment -n insurance-application --timeout=300s
+          echo "Checking existing deployments..."
+          kubectl get deployments -n insurance-application
+          
+          echo "Waiting for deployment rollout..."
+          # Try to wait for the specific deployment that exists
+          if kubectl get deployment insurance-app-deployment -n insurance-application &>/dev/null; then
+            echo "Found insurance-app-deployment, waiting for rollout..."
+            kubectl rollout status deployment/insurance-app-deployment -n insurance-application --timeout=600s
+          elif kubectl get deployment insurance-app -n insurance-application &>/dev/null; then
+            echo "Found insurance-app, waiting for rollout..."
+            kubectl rollout status deployment/insurance-app -n insurance-application --timeout=600s
+          else
+            echo "No matching deployment found, listing all deployments:"
+            kubectl get deployments -n insurance-application
+            exit 1
+          fi
+          
+          echo "Deployment completed successfully!"
 
       - name: Get service URL
         run: |
@@ -438,6 +477,8 @@ jobs:
           kubectl get services -n insurance-application
           echo "Getting pod status..."
           kubectl get pods -n insurance-application
+          echo "Getting pod details..."
+          kubectl describe pods -n insurance-application | grep -E "(Name:|Image:|State:|Ready:|Events:)" || true
 
       - name: Get deployment URL
         id: get-url
