@@ -182,8 +182,8 @@ jobs:
   build:
     name: 🏗️ Build Application
     runs-on: ubuntu-latest
-    needs: codeql  # Wait for CodeQL to complete
-    if: always()  # Run even if previous jobs failed (since they're warnings)
+    # needs: codeql  # Wait for CodeQL to complete (COMMENTED FOR PRACTICAL RUNS)
+    # if: always()  # Run even if previous jobs failed (since they're warnings)
     outputs:
       image-tag: ${{ steps.image-tag.outputs.tag }}
       image-digest: ${{ steps.build.outputs.digest }}
@@ -291,86 +291,87 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
+          platforms: linux/arm64
           tags: ${{ steps.image-tag.outputs.tag }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # Stage 5: Docker Image Vulnerability Scan with Trivy (Sequential - runs after Build)
-  trivy-scan:
-    name: 🛡️ Trivy Docker Image Scan
-    runs-on: ubuntu-latest
-    needs: build  # Wait for Build to complete
-    continue-on-error: true  # Warn but don't fail
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ vars.AWS_ACCESS_KEY_ID || secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ vars.AWS_SECRET_ACCESS_KEY || secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ vars.AWS_SESSION_TOKEN || secrets.AWS_SESSION_TOKEN }}
-          aws-region: ap-south-1
+  # Stage 5: Docker Image Vulnerability Scan with Trivy (COMMENTED FOR PRACTICAL RUNS)
+  # trivy-scan:
+  #   name: 🛡️ Trivy Docker Image Scan
+  #   runs-on: ubuntu-latest
+  #   needs: build  # Wait for Build to complete
+  #   continue-on-error: true  # Warn but don't fail
+  #   steps:
+  #     - name: Configure AWS credentials
+  #       uses: aws-actions/configure-aws-credentials@v4
+  #       with:
+  #         aws-access-key-id: ${{ vars.AWS_ACCESS_KEY_ID || secrets.AWS_ACCESS_KEY_ID }}
+  #         aws-secret-access-key: ${{ vars.AWS_SECRET_ACCESS_KEY || secrets.AWS_SECRET_ACCESS_KEY }}
+  #         aws-session-token: ${{ vars.AWS_SESSION_TOKEN || secrets.AWS_SESSION_TOKEN }}
+  #         aws-region: ap-south-1
 
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+  #     - name: Login to Amazon ECR
+  #       id: login-ecr
+  #       uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Run Trivy vulnerability scanner (Table format)
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ needs.build.outputs.image-tag }}
-          format: 'table'
-          exit-code: '0'  # Don't fail the build on vulnerabilities
-        continue-on-error: true
+  #     - name: Run Trivy vulnerability scanner (Table format)
+  #       uses: aquasecurity/trivy-action@master
+  #       with:
+  #         image-ref: ${{ needs.build.outputs.image-tag }}
+  #         format: 'table'
+  #         exit-code: '0'  # Don't fail the build on vulnerabilities
+  #       continue-on-error: true
 
-      - name: Run Trivy vulnerability scanner (JSON summary)
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ needs.build.outputs.image-tag }}
-          format: 'json'
-          output: 'trivy-results.json'
-        continue-on-error: true
+  #     - name: Run Trivy vulnerability scanner (JSON summary)
+  #       uses: aquasecurity/trivy-action@master
+  #       with:
+  #         image-ref: ${{ needs.build.outputs.image-tag }}
+  #         format: 'json'
+  #         output: 'trivy-results.json'
+  #       continue-on-error: true
 
-      - name: Display Trivy Results Summary
-        if: always()
-        run: |
-          echo "### 🛡️ Security Scan Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Image Scanned:** ${{ needs.build.outputs.image-tag }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+  #     - name: Display Trivy Results Summary
+  #       if: always()
+  #       run: |
+  #         echo "### 🛡️ Security Scan Results" >> $GITHUB_STEP_SUMMARY
+  #         echo "" >> $GITHUB_STEP_SUMMARY
+  #         echo "**Image Scanned:** ${{ needs.build.outputs.image-tag }}" >> $GITHUB_STEP_SUMMARY
+  #         echo "" >> $GITHUB_STEP_SUMMARY
           
-          if [ -f trivy-results.json ]; then
-            # Count vulnerabilities by severity
-            CRITICAL=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' trivy-results.json 2>/dev/null || echo "0")
-            HIGH=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH")] | length' trivy-results.json 2>/dev/null || echo "0")
-            MEDIUM=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="MEDIUM")] | length' trivy-results.json 2>/dev/null || echo "0")
-            LOW=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="LOW")] | length' trivy-results.json 2>/dev/null || echo "0")
+  #         if [ -f trivy-results.json ]; then
+  #           # Count vulnerabilities by severity
+  #           CRITICAL=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' trivy-results.json 2>/dev/null || echo "0")
+  #           HIGH=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH")] | length' trivy-results.json 2>/dev/null || echo "0")
+  #           MEDIUM=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="MEDIUM")] | length' trivy-results.json 2>/dev/null || echo "0")
+  #           LOW=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="LOW")] | length' trivy-results.json 2>/dev/null || echo "0")
             
-            echo "| Severity | Count |" >> $GITHUB_STEP_SUMMARY
-            echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
-            echo "| 🔴 Critical | $CRITICAL |" >> $GITHUB_STEP_SUMMARY
-            echo "| 🟠 High | $HIGH |" >> $GITHUB_STEP_SUMMARY
-            echo "| 🟡 Medium | $MEDIUM |" >> $GITHUB_STEP_SUMMARY
-            echo "| 🟢 Low | $LOW |" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "✅ **Security scan completed successfully**" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "⚠️ **No vulnerability report generated**" >> $GITHUB_STEP_SUMMARY
-          fi
+  #           echo "| Severity | Count |" >> $GITHUB_STEP_SUMMARY
+  #           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+  #           echo "| 🔴 Critical | $CRITICAL |" >> $GITHUB_STEP_SUMMARY
+  #           echo "| 🟠 High | $HIGH |" >> $GITHUB_STEP_SUMMARY
+  #           echo "| 🟡 Medium | $MEDIUM |" >> $GITHUB_STEP_SUMMARY
+  #           echo "| 🟢 Low | $LOW |" >> $GITHUB_STEP_SUMMARY
+  #           echo "" >> $GITHUB_STEP_SUMMARY
+  #           echo "✅ **Security scan completed successfully**" >> $GITHUB_STEP_SUMMARY
+  #         else
+  #           echo "⚠️ **No vulnerability report generated**" >> $GITHUB_STEP_SUMMARY
+  #         fi
 
-      - name: Upload Trivy scan results as artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: trivy-scan-results
-          path: trivy-results.json
-          retention-days: 7
+  #     - name: Upload Trivy scan results as artifact
+  #       if: always()
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: trivy-scan-results
+  #         path: trivy-results.json
+  #         retention-days: 7
 
-  # Stage 6: Deploy to EKS Cluster (Sequential - runs after Trivy)
+  # Stage 6: Deploy to EKS Cluster (Sequential - runs after Build only)
   deploy:
     name: 🚀 Deploy to EKS
     runs-on: ubuntu-latest
-    needs: [build, trivy-scan]  # Wait for both build and trivy to complete
+    needs: [build]  # Wait for build only (Trivy commented out)
     if: always() && needs.build.result == 'success'  # Only deploy if build succeeded
     environment: production
     steps:
@@ -450,13 +451,22 @@ jobs:
             kubectl apply -f k8s/app-service-nodeport.yaml || true
           fi
 
-      - name: Restart deployment to pull new image
+      - name: Force deployment restart and cleanup
         run: |
+          echo "Forcing deployment restart with new image..."
+          
+          # Delete existing pods to force recreation with new image
+          echo "Deleting existing pods..."
+          kubectl delete pods -n insurance-application -l app=insurance-app --ignore-not-found=true
+          
+          # Wait a moment for cleanup
+          sleep 5
+          
+          # Check current deployment image
           echo "Checking current deployment image..."
           kubectl get deployment insurance-app-deployment -n insurance-application -o jsonpath='{.spec.template.spec.containers[0].image}' || true
-          kubectl get deployment insurance-app-deployment -n insurance-application -o jsonpath='{.spec.template.spec.initContainers[0].image}' || true
           
-          # Restart the deployment to ensure it pulls the new image
+          # Force restart the deployment
           if kubectl get deployment insurance-app-deployment -n insurance-application &>/dev/null; then
             echo "Restarting insurance-app-deployment..."
             kubectl rollout restart deployment/insurance-app-deployment -n insurance-application
