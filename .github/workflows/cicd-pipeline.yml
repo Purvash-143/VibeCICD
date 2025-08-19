@@ -185,8 +185,9 @@ jobs:
     needs: codeql  # Wait for CodeQL to complete
     if: always()  # Run even if previous jobs failed (since they're warnings)
     outputs:
-      image-tag: ${{ steps.meta.outputs.tags }}
+      image-tag: ${{ steps.image-tag.outputs.tag }}
       image-digest: ${{ steps.build.outputs.digest }}
+      registry: ${{ steps.login-ecr.outputs.registry }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -271,6 +272,15 @@ jobs:
             type=sha,prefix={{branch}}-
             type=raw,value=latest,enable={{is_default_branch}}
 
+      - name: Create single image tag
+        id: image-tag
+        run: |
+          # Create a single image tag for deployment (shorter format)
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-8)
+          IMAGE_TAG="${{ steps.login-ecr.outputs.registry }}/insurance-app:${SHORT_SHA}"
+          echo "tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          echo "Image tag for deployment: ${IMAGE_TAG}"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -281,7 +291,7 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: ${{ steps.image-tag.outputs.tag }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
