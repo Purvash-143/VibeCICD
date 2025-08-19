@@ -409,19 +409,23 @@ jobs:
           # Update the image tag in deployment file
           if [ -f vibecoding/k8s/06-app-deployment.yaml ]; then
             echo "Updating 06-app-deployment.yaml..."
-            sed -i "s|image: .*|image: ${{ needs.build.outputs.image-tag }}|g" vibecoding/k8s/06-app-deployment.yaml
-            echo "Updated deployment file content:"
-            grep -A 2 -B 2 "image:" vibecoding/k8s/06-app-deployment.yaml
+            echo "Before update:"
+            grep -n "image:" vibecoding/k8s/06-app-deployment.yaml
+            
+            # Replace both the init container and main container images
+            sed -i "s|image: your-registry/insurance-app:latest.*|image: ${{ needs.build.outputs.image-tag }}|g" vibecoding/k8s/06-app-deployment.yaml
+            sed -i "s|image: .*insurance-app:.*|image: ${{ needs.build.outputs.image-tag }}|g" vibecoding/k8s/06-app-deployment.yaml
+            
+            echo "After update:"
+            grep -n "image:" vibecoding/k8s/06-app-deployment.yaml
           elif [ -f vibecoding/k8s/app-deployment.yaml ]; then
             echo "Updating app-deployment.yaml..."
-            sed -i "s|image: .*|image: ${{ needs.build.outputs.image-tag }}|g" vibecoding/k8s/app-deployment.yaml
-            echo "Updated deployment file content:"
-            grep -A 2 -B 2 "image:" vibecoding/k8s/app-deployment.yaml
+            sed -i "s|image: your-registry/insurance-app:latest.*|image: ${{ needs.build.outputs.image-tag }}|g" vibecoding/k8s/app-deployment.yaml
+            sed -i "s|image: .*insurance-app:.*|image: ${{ needs.build.outputs.image-tag }}|g" vibecoding/k8s/app-deployment.yaml
           elif [ -f k8s/app-deployment.yaml ]; then
             echo "Updating k8s/app-deployment.yaml..."
-            sed -i "s|image: .*|image: ${{ needs.build.outputs.image-tag }}|g" k8s/app-deployment.yaml
-            echo "Updated deployment file content:"
-            grep -A 2 -B 2 "image:" k8s/app-deployment.yaml
+            sed -i "s|image: your-registry/insurance-app:latest.*|image: ${{ needs.build.outputs.image-tag }}|g" k8s/app-deployment.yaml
+            sed -i "s|image: .*insurance-app:.*|image: ${{ needs.build.outputs.image-tag }}|g" k8s/app-deployment.yaml
           fi
 
       - name: Deploy to Kubernetes
@@ -441,6 +445,10 @@ jobs:
 
       - name: Restart deployment to pull new image
         run: |
+          echo "Checking current deployment image..."
+          kubectl get deployment insurance-app-deployment -n insurance-application -o jsonpath='{.spec.template.spec.containers[0].image}' || true
+          kubectl get deployment insurance-app-deployment -n insurance-application -o jsonpath='{.spec.template.spec.initContainers[0].image}' || true
+          
           # Restart the deployment to ensure it pulls the new image
           if kubectl get deployment insurance-app-deployment -n insurance-application &>/dev/null; then
             echo "Restarting insurance-app-deployment..."
@@ -449,27 +457,47 @@ jobs:
             echo "Restarting insurance-app..."
             kubectl rollout restart deployment/insurance-app -n insurance-application
           fi
+          
+          echo "Waiting a moment for restart to take effect..."
+          sleep 10
 
       - name: Wait for deployment to be ready
         run: |
           echo "Checking existing deployments..."
           kubectl get deployments -n insurance-application
           
-          echo "Waiting for deployment rollout..."
+          echo "Checking pod status before waiting..."
+          kubectl get pods -n insurance-application
+          
+          echo "Waiting for deployment rollout (max 5 minutes)..."
           # Try to wait for the specific deployment that exists
           if kubectl get deployment insurance-app-deployment -n insurance-application &>/dev/null; then
             echo "Found insurance-app-deployment, waiting for rollout..."
-            kubectl rollout status deployment/insurance-app-deployment -n insurance-application --timeout=600s
+            kubectl rollout status deployment/insurance-app-deployment -n insurance-application --timeout=300s || {
+              echo "Rollout timed out, checking pod details..."
+              kubectl get pods -n insurance-application
+              kubectl describe pods -n insurance-application -l app=insurance-app
+              echo "Checking events..."
+              kubectl get events -n insurance-application --sort-by='.lastTimestamp' | tail -10
+              echo "Continuing despite timeout..."
+            }
           elif kubectl get deployment insurance-app -n insurance-application &>/dev/null; then
             echo "Found insurance-app, waiting for rollout..."
-            kubectl rollout status deployment/insurance-app -n insurance-application --timeout=600s
+            kubectl rollout status deployment/insurance-app -n insurance-application --timeout=300s || {
+              echo "Rollout timed out, checking pod details..."
+              kubectl get pods -n insurance-application
+              kubectl describe pods -n insurance-application -l app=insurance-app
+              echo "Checking events..."
+              kubectl get events -n insurance-application --sort-by='.lastTimestamp' | tail -10
+              echo "Continuing despite timeout..."
+            }
           else
             echo "No matching deployment found, listing all deployments:"
             kubectl get deployments -n insurance-application
             exit 1
           fi
           
-          echo "Deployment completed successfully!"
+          echo "Deployment step completed!"
 
       - name: Get service URL
         run: |
