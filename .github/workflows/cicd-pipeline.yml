@@ -10,7 +10,7 @@ env:
   AWS_REGION: ap-south-1
   ECR_REPOSITORY: insurance-app
   EKS_CLUSTER_NAME: eks-nvai-devops
-  KUBERNETES_NAMESPACE: insurance-app
+  KUBERNETES_NAMESPACE: insurance-application
   AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
 
 jobs:
@@ -390,7 +390,7 @@ jobs:
 
       - name: Create namespace if not exists
         run: |
-          kubectl create namespace insurance-app --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create namespace insurance-application --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Create/Update ECR Secret
         run: |
@@ -398,7 +398,7 @@ jobs:
             --docker-server=${{ steps.login-ecr.outputs.registry }} \
             --docker-username=AWS \
             --docker-password=$(aws ecr get-login-password --region ap-south-1) \
-            -n insurance-app \
+            -n insurance-application \
             --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Update deployment image
@@ -429,20 +429,20 @@ jobs:
 
       - name: Wait for deployment to be ready
         run: |
-          kubectl rollout status deployment/insurance-app -n insurance-app --timeout=300s || 
-          kubectl rollout status deployment/insurance-app-deployment -n insurance-app --timeout=300s
+          kubectl rollout status deployment/insurance-app -n insurance-application --timeout=300s || 
+          kubectl rollout status deployment/insurance-app-deployment -n insurance-application --timeout=300s
 
       - name: Get service URL
         run: |
           echo "Getting service information..."
-          kubectl get services -n insurance-app
+          kubectl get services -n insurance-application
           echo "Getting pod status..."
-          kubectl get pods -n insurance-app
+          kubectl get pods -n insurance-application
 
       - name: Get deployment URL
         id: get-url
         run: |
-          EXTERNAL_IP=$(kubectl get svc insurance-app-service -n insurance-app -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          EXTERNAL_IP=$(kubectl get svc insurance-app-service -n insurance-application -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
           echo "url=http://$EXTERNAL_IP" >> $GITHUB_OUTPUT
           echo "### 🎉 Deployment Successful!" >> $GITHUB_STEP_SUMMARY
           echo "Application URL: http://$EXTERNAL_IP" >> $GITHUB_STEP_SUMMARY
